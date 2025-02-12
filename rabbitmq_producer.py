@@ -2,55 +2,101 @@ import pika
 import json 
 import time 
 import logging
-from pyspark.sql import SparkSession
+from pyspark.sql import SparkSession, DataFrame
+from pyspark.sql.functions import col
+from typing import Dict, List
 
-
-DATA_FILE = 'Sales Transaction v.4a.csv'
-RABBITMQ_HOST = 'localhost'
-RABBITMQ_QUEUE = 'ecommerce_data'
-DELAY = 0.01
+# Constants
+DATA_FILE : str = 'Sales Transaction v.4a.csv'
+RABBITMQ_HOST: str = 'localhost'
+RABBITMQ_QUEUE: str = 'ecommerce_data'
+BATCH_SIZE: int = 10000
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
+class SparkSessionFactory:
+    """ Factory for creating and managing SparkSession """
 
-def init_spark():
-    return SparkSession.builder.appName('Ecommerce Data').getOrCreate()
+    _instance: SparkSession = None 
 
-def read_data(spark):
+    @classmethod
+    def spark_session(cls) -> SparkSession:
+        """ Singleton implementation to get SparkSession """
+        if cls._instance is None:
+            cls._instance = SparkSession.builder.appName('Ecommerce Data').getOrCreate()
+        return cls._instance
+
+class DataCleaner:
+
+    """ Data cleaning operations """
+
+    @staticmethod
+    def clean_data(df: DataFrame) -> DataFrame:
+        logging.info("Cleaning data")
+
+        df = df.dropna(subset=["TransactionNo", "ProductNo", "ProductName", "Price", "Quantity", "CustomerNo", "Country"])
+        df = df.dropDuplicates(["TransactionNo", "ProductNo", "CustomerNo"])
+        df = df.withColumn("Price", col("Price").cast("float")) \
+            .withColumn("Quantity", col("Quantity").cast("int"))
+        logging.info("Data cleaned")
+        return df
+
+class RabbitMQProducer:
+    """ RabbitMQ connection and message publishing in batches for faster read """
+
+    def __init__(self, host: str, queue: str) -> None:
+        self.host = host
+        self.queue = queue 
+        self.connection = pika.BlockingConnection(pika.ConnectionParameters(self.host))
+        self.channel = self.connection.channel()
+        self.channel.queue_declare(queue=self.queue)
+
+    def send_batch(self, batch: list[dict]) -> None:
+        for m in batch:
+            self.channel.basic_publish(exchange='', routing_key=self.queue, body=json.dumps(m))
+        logging.info(f"Sent {len(batch)} messages")
+    
+    def close_connection(self) -> None:
+        self.connection.close()
+
+
+def load_data(file: str) -> DataFrame:
     """ Read csv into a spark dataframe """
-    logging.info(f"Reading data from {DATA_FILE}")
-    return spark.read.csv(DATA_FILE, header=True, inferSchema=True)
+    logging.info(f"Reading data from {file}")
+    spark = SparkSessionFactory.spark_session()
+    df = spark.read.csv(file, header=True, inferSchema=True)
+    return df
 
-def send_data(row, channel):
-    """ Sends a row of data to RabbitMQ """
-    message = json.dumps(row.asDict())
-    channel.basic_publish(exchange='', routing_key=RABBITMQ_QUEUE, body=message)
-    logging.info(f"Sent message: {message}")
 
-def main():
-    spark = init_spark()
-    df = read_data(spark)
-    
-    # Connect to RabbitMQ
-    connection = pika.BlockingConnection(pika.ConnectionParameters(RABBITMQ_HOST))
-    channel = connection.channel()
-    channel.queue_declare(queue=RABBITMQ_QUEUE)
+def main() -> None:
+    """ Main function to execute the ETL pipeline """ 
+    spark = SparkSessionFactory.spark_session()
+    df = load_data(DATA_FILE)
+    df = DataCleaner.clean_data(df)
 
-    for i, row in enumerate(df.toLocalIterator()):
-        if i >= 10:
-            break
+    producer = RabbitMQProducer(RABBITMQ_HOST, RABBITMQ_QUEUE)
 
-        send_data(row, channel)
-        time.sleep(DELAY)
-    
+    batch: List[dict] = []
+    for row in df.collect():  # Collects all rows efficiently
+        batch.append(row.asDict())
 
-    connection.close()
+        if len(batch) >= BATCH_SIZE:
+            producer.send_batch(batch)
+            batch.clear()
+        
+    if batch:
+        producer.send_batch(batch)
+        
+    producer.close_connection()
     spark.stop()
-    connection.close()
-
     logging.info("Finished sending data")
 
-
-if  __name__ == '__main__':
+if __name__ == '__main__': 
     main()
+
+
+
+
+
+

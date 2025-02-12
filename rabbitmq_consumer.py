@@ -1,35 +1,68 @@
 import pika
 import json
 import logging
+from typing import Any, Dict
+from functools import lru_cache
+from rabbitmq_producer import RABBITMQ_HOST, RABBITMQ_QUEUE
 
 # Constants
-RABBITMQ_HOST = "localhost"
-QUEUE_NAME = "ecommerce_data"
+PREFETCH_COUNT: int = 10000
+LOG_FORMAT : str = "%(asctime)s - %(message)s" 
 
 # Logging setup
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 
-def process_message(ch, method, properties, body):
-    """Processes incoming messages from RabbitMQ."""
-    data = json.loads(body)
-    logging.info(f"✅ Received message: {data}")
 
-    # Simulate processing (e.g., store in DB)
-    # db.store(data)
+class RabbitMQConsumer:
+    """ RabbitMQ connection and message consumption """
 
-    ch.basic_ack(delivery_tag=method.delivery_tag)  # Acknowledge message
+    def __init__(self) -> None:
+        self.host = RABBITMQ_HOST
+        self.queue = RABBITMQ_QUEUE
+        self.connection =  None
+        self.channel = None
 
-def main():
-    """Consumes messages from RabbitMQ."""
-    connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
-    channel = connection.channel()
-    channel.queue_declare(queue=QUEUE_NAME)
+    def connect(self) -> None:
+        """ Establish connection and channel with RabbitMQ """
 
-    logging.info(f"🎧 Waiting for messages on '{QUEUE_NAME}'...")
-    channel.basic_consume(queue=QUEUE_NAME, on_message_callback=process_message)
+        logging.info("Connecting to RabbitMQ")
+        self.connection = pika.BlockingConnection(pika.ConnectionParameters(self.host))
+        self.channel = self.connection.channel()
+        self.channel.queue_declare(queue=self.queue)   
+        self.channel.basic_qos(prefetch_count=PREFETCH_COUNT) # Limit unprocessed messages
 
-    channel.start_consuming()  # Keep listening
+    def process_message(self, ch: Any, method: Any, properties: Any, body: bytes) -> None:
+        """ Processes incoming messages from RabbitMQ """
+
+        try:
+            data: Dict[str, Any] = json.loads(body)
+            logging.info(f"Received message: {data}")
+
+            # Simulate processing (e.g., store in DB)
+            # db.store(data)
+            # Acknowledge message
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+        except Exeption as e:
+            logging.error("Error processing message: {e}")
+
+    def store_data(self, data: Dict[str, Any]) -> None:
+        """ Simulate storing data in DB (MongoDB, Snowflake) """
+        pass
+    
+    def consume(self) -> None:
+        """ consumes messages from RabbitMQ """
+        self.connect()
+        logging.info(f"Listening for messages on '{self.queue}'")
+        self.channel.basic_consume(queue=self.queue, on_message_callback=self.process_message)
+        try:
+            self.channel.start_consuming()
+        except KeyboardInterrupt:
+            logging.info("Stopping consumer")
+            self.connection.close()
 
 if __name__ == "__main__":
-    main()
+    consumer = RabbitMQConsumer()
+    consumer.consume()
+
+
 
