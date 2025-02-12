@@ -7,6 +7,7 @@ from rabbitmq_producer import RABBITMQ_HOST, RABBITMQ_QUEUE
 
 # Constants
 PREFETCH_COUNT: int = 10000
+BATCH_SIZE: int = 10000
 LOG_FORMAT : str = "%(asctime)s - %(message)s" 
 
 # Logging setup
@@ -21,6 +22,7 @@ class RabbitMQConsumer:
         self.queue = RABBITMQ_QUEUE
         self.connection =  None
         self.channel = None
+        self.batch = [] # Buffer to store batches
 
     def connect(self) -> None:
         """ Establish connection and channel with RabbitMQ """
@@ -36,19 +38,27 @@ class RabbitMQConsumer:
 
         try:
             data: Dict[str, Any] = json.loads(body)
-            logging.info(f"Received message: {data}")
+            data["delivery_tag"] = method.delivery_tag
+            self.batch.append(data)
 
-            # Simulate processing (e.g., store in DB)
-            # db.store(data)
-            # Acknowledge message
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-        except Exeption as e:
-            logging.error("Error processing message: {e}")
+            if len(self.batch) >= BATCH_SIZE:
+                self.process_batch(ch)
 
-    def store_data(self, data: Dict[str, Any]) -> None:
-        """ Simulate storing data in DB (MongoDB, Snowflake) """
-        pass
+        except Exception as e:
+            logging.error(f"Error processing message: {e}")
     
+    def process_batch(self, ch: Any) -> None:
+        """ Process batch of messages """
+
+        logging.info(f"Processing batch of {len(self.batch)} messages")
+        # Simulate storing in MongoDB or Snowflake
+        # db.store(self.batch)
+        # Acknowledge all messages in batch
+        for message in self.batch:
+            ch.basic_ack(delivery_tag=message["delivery_tag"])
+        self.batch.clear()
+
+
     def consume(self) -> None:
         """ consumes messages from RabbitMQ """
         self.connect()
