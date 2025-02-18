@@ -7,7 +7,7 @@ from pyspark.sql.functions import col
 from typing import Dict, List
 
 # Constants
-DATA_FILE : str = 'Sales Transaction v.4a.csv'
+DATA_FILE : str = './ingestion/Sales Transaction v.4a.csv'
 RABBITMQ_HOST: str = 'localhost'
 RABBITMQ_QUEUE: str = 'ecommerce_data'
 BATCH_SIZE: int = 10000

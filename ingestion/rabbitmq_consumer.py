@@ -3,7 +3,8 @@ import json
 import logging
 import subprocess
 from typing import Any, Dict
-from rabbitmq_producer import RABBITMQ_HOST, RABBITMQ_QUEUE
+from ingestion.rabbitmq_producer import RABBITMQ_HOST, RABBITMQ_QUEUE
+from storage.mongo_collections import raw_data
 
 # Constants
 PREFETCH_COUNT: int = 10000
@@ -49,6 +50,10 @@ class RabbitMQConsumer:
     def process_batch(self, ch: Any) -> None:
         """ Process and acknowledge messages in batch """
         logging.info(f"Processing batch of {len(self.batch)} messages")
+
+        docs =[{k: v for k, v in doc.items() if k != "delivery_tag"} for doc in self.batch]
+        raw_data.insert_many(docs) 
+        logging.info(f"Inserted {len(docs)} documents") 
 
         # Acknowledge all messages **AFTER** processing the batch
         for message in self.batch:
